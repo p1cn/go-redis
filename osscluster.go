@@ -14,11 +14,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/redis/go-redis/v9/internal"
-	"github.com/redis/go-redis/v9/internal/hashtag"
-	"github.com/redis/go-redis/v9/internal/pool"
-	"github.com/redis/go-redis/v9/internal/proto"
-	"github.com/redis/go-redis/v9/internal/rand"
+	"github.com/p1cn/go-redis/v9/internal"
+	"github.com/p1cn/go-redis/v9/internal/hashtag"
+	"github.com/p1cn/go-redis/v9/internal/pool"
+	"github.com/p1cn/go-redis/v9/internal/proto"
+	"github.com/p1cn/go-redis/v9/internal/rand"
 )
 
 const (
@@ -402,6 +402,50 @@ func (n *clusterNode) Failing() bool {
 	return false
 }
 
+func (n *clusterNode) Syncing() bool {
+	// Execute 'info replication' command and read fields 'master_sync_in_progress'
+	// and 'master_link_status' to determine if the node is in sync state.
+	// If 'master_sync_in_progress' is 0 and 'master_link_status' is 'up',
+	// then the node is NOT in sync state.
+	// The response of 'info replication' command is in the following format:
+	// 		role:slave
+	// 		master_host:10.1.1.1
+	// 		master_port:6379
+	// 		master_link_status:up
+	// 		master_last_io_seconds_ago:5
+	// 		master_sync_in_progress:0
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	info, err := n.Client.Info(ctx, "replication").Result()
+	if err != nil {
+		return true
+	}
+
+	inSyncProgress := true
+	statusUp := false
+	visitProgressLine := false
+	visitStatusLine := false
+	lines := strings.Split(info, "\r\n")
+	for _, line := range lines {
+		if visitProgressLine && visitStatusLine {
+			break
+		}
+		if line == "master_sync_in_progress:0" {
+			inSyncProgress = false
+			visitProgressLine = true
+			continue
+		}
+		if line == "master_link_status:up" {
+			statusUp = true
+			visitStatusLine = true
+			continue
+		}
+	}
+
+	return inSyncProgress || !statusUp
+}
+
 func (n *clusterNode) Generation() uint32 {
 	return atomic.LoadUint32(&n.generation)
 }
@@ -667,12 +711,15 @@ func newClusterState(
 			}
 
 			node.SetGeneration(c.generation)
-			nodes = append(nodes, node)
 
 			if i == 0 {
+				nodes = append(nodes, node)
 				c.Masters = appendUniqueNode(c.Masters, node)
 			} else {
-				c.Slaves = appendUniqueNode(c.Slaves, node)
+				if !node.Syncing() {
+					nodes = append(nodes, node)
+					c.Slaves = appendUniqueNode(c.Slaves, node)
+				}
 			}
 		}
 
