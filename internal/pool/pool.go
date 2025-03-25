@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/go-redis/redis/v8/internal"
+	"github.com/p1cn/go-redis/v8/internal"
 )
 
 var (

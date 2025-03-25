@@ -2,11 +2,12 @@ package redisotel_test
 
 import (
 	"context"
-	semconv "go.opentelemetry.io/otel/semconv/v1.7.0"
 	"testing"
 
+	semconv "go.opentelemetry.io/otel/semconv/v1.7.0"
+
 	"github.com/go-redis/redis/extra/redisotel/v8"
-	"github.com/go-redis/redis/v8"
+	"github.com/p1cn/go-redis/v8"
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"

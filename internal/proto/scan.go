@@ -6,10 +6,11 @@ import (
 	"reflect"
 	"time"
 
-	"github.com/go-redis/redis/v8/internal/util"
+	"github.com/p1cn/go-redis/v8/internal/util"
 )
 
 // Scan parses bytes `b` to `v` with appropriate type.
+//
 //nolint:gocyclo
 func Scan(b []byte, v interface{}) error {
 	switch v := v.(type) {
