@@ -275,7 +275,7 @@ func (n *clusterNode) checkSyncing() uint32 {
 }
 
 func (n *clusterNode) Syncing() bool {
-	const timeout = 10 // 10 seconds
+	const timeout = 60 // 60 seconds
 	checkSyncAt := atomic.LoadUint32(&n.checkSyncAt)
 	if checkSyncAt > 0 && time.Now().Unix()-int64(checkSyncAt) < timeout {
 		return atomic.LoadUint32(&n.syncing) > 0
