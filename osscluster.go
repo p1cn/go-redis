@@ -324,6 +324,11 @@ type clusterNode struct {
 	// last time the latency measurement was performed for the node, stored in nanoseconds
 	// from epoch
 	lastLatencyMeasurement int64 // atomic
+
+	// last time the syncing check was performed for the node, stored in unix timestamp
+	checkSyncAt uint32 // atomic
+	// 0: not syncing, 1: syncing
+	syncing uint32 // atomic
 }
 
 func newClusterNode(clOpt *ClusterOptions, addr string) *clusterNode {
@@ -402,7 +407,7 @@ func (n *clusterNode) Failing() bool {
 	return false
 }
 
-func (n *clusterNode) Syncing() bool {
+func (n *clusterNode) checkSyncing() uint32 {
 	// Execute 'info replication' command and read fields 'master_sync_in_progress'
 	// and 'master_link_status' to determine if the node is in sync state.
 	// If 'master_sync_in_progress' is 0 and 'master_link_status' is 'up',
@@ -419,7 +424,7 @@ func (n *clusterNode) Syncing() bool {
 	defer cancel()
 	info, err := n.Client.Info(ctx, "replication").Result()
 	if err != nil {
-		return true
+		return 1
 	}
 
 	inSyncProgress := true
@@ -443,7 +448,23 @@ func (n *clusterNode) Syncing() bool {
 		}
 	}
 
-	return inSyncProgress || !statusUp
+	if inSyncProgress || !statusUp {
+		return 1
+	}
+	return 0
+}
+
+func (n *clusterNode) Syncing() bool {
+	const timeout = 60 // 60 seconds
+	checkSyncAt := atomic.LoadUint32(&n.checkSyncAt)
+	if checkSyncAt > 0 && time.Now().Unix()-int64(checkSyncAt) < timeout {
+		return atomic.LoadUint32(&n.syncing) > 0
+	}
+
+	syncing := n.checkSyncing()
+	atomic.StoreUint32(&n.syncing, uint32(syncing))
+	atomic.StoreUint32(&n.checkSyncAt, uint32(time.Now().Unix()))
+	return syncing > 0
 }
 
 func (n *clusterNode) Generation() uint32 {
