@@ -743,6 +743,7 @@ type ClusterClient struct {
 // http://redis.io/topics/cluster-spec.
 func NewClusterClient(opt *ClusterOptions) *ClusterClient {
 	opt.init()
+	fmt.Println("NewClusterClient Syncing delay 60s")
 
 	c := &ClusterClient{
 		clusterClient: &clusterClient{
