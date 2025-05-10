@@ -287,6 +287,13 @@ func (n *clusterNode) Syncing() bool {
 	return syncing > 0
 }
 
+// updateSyncStatus 异步更新节点的同步状态
+func (n *clusterNode) updateSyncStatus() {
+	syncing := n.checkSyncing()
+	atomic.StoreUint32(&n.syncing, uint32(syncing))
+	atomic.StoreUint32(&n.checkSyncAt, uint32(time.Now().Unix()))
+}
+
 func (n *clusterNode) Generation() uint32 {
 	return atomic.LoadUint32(&n.generation)
 }
@@ -298,6 +305,12 @@ func (n *clusterNode) SetGeneration(gen uint32) {
 			break
 		}
 	}
+}
+
+// 添加 CachedSyncing 方法，确保只使用缓存值
+func (n *clusterNode) CachedSyncing() bool {
+	// 只返回缓存的值，永远不触发同步的 checkSyncing
+	return atomic.LoadUint32(&n.syncing) > 0
 }
 
 //------------------------------------------------------------------------------
@@ -529,7 +542,7 @@ func newClusterState(
 				nodes = append(nodes, node)
 				c.Masters = appendUniqueNode(c.Masters, node)
 			} else {
-				if !node.Syncing() {
+				if !node.CachedSyncing() {
 					nodes = append(nodes, node)
 					c.Slaves = appendUniqueNode(c.Slaves, node)
 				}
@@ -743,7 +756,7 @@ type ClusterClient struct {
 // http://redis.io/topics/cluster-spec.
 func NewClusterClient(opt *ClusterOptions) *ClusterClient {
 	opt.init()
-
+	fmt.Println("NewClusterClient startHealthChecker")
 	c := &ClusterClient{
 		clusterClient: &clusterClient{
 			opt:   opt,
@@ -758,6 +771,9 @@ func NewClusterClient(opt *ClusterOptions) *ClusterClient {
 	if opt.IdleCheckFrequency > 0 {
 		go c.reaper(opt.IdleCheckFrequency)
 	}
+
+	// 启动后台健康检查
+	c.startHealthChecker()
 
 	return c
 }
@@ -1758,4 +1774,56 @@ func (m *cmdsMap) Add(node *clusterNode, cmds ...Cmder) {
 	m.mu.Lock()
 	m.m[node] = append(m.m[node], cmds...)
 	m.mu.Unlock()
+}
+
+// startHealthChecker 启动后台健康检查 Goroutine
+func (c *ClusterClient) startHealthChecker() {
+	ticker := time.NewTicker(10 * time.Second)
+	go func() {
+		defer ticker.Stop()
+		for range ticker.C {
+			// 获取当前缓存的集群状态，避免触发同步重载
+			cs := c.state.state.Load()
+			if cs == nil {
+				// 如果获取状态失败，跳过本次检查
+				continue
+			}
+
+			// 我们只需要检查从节点
+			state := cs.(*clusterState)
+			slaves := state.Slaves
+			if len(slaves) == 0 {
+				continue
+			}
+
+			// 控制最大并发数为20的信号量
+			concurrencyLimit := make(chan struct{}, 20)
+			var wg sync.WaitGroup
+
+			// 并发更新从节点的同步状态
+			for _, node := range slaves {
+				if node == nil || node.Client == nil {
+					continue
+				}
+
+				// 先获取信号量，控制并发goroutine的数量
+				concurrencyLimit <- struct{}{}
+
+				wg.Add(1)
+				go func(node *clusterNode) {
+					defer wg.Done()
+					defer func() {
+						// 释放信号量
+						<-concurrencyLimit
+					}()
+
+					// 从节点直接进行同步状态检查，无需再检查是否是slave
+					node.updateSyncStatus()
+				}(node)
+			}
+
+			// 等待所有节点处理完成
+			wg.Wait()
+		}
+	}()
 }
